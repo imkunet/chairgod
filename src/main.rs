@@ -5,10 +5,10 @@ mod util;
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
-use twilight_gateway::{Event, Intents, Latency, Shard, ShardId};
+use twilight_gateway::{Event, Intents, Shard, ShardId};
 
 use crate::{config::ChairConfig, lfg::LFGManager, models::ChairContext};
 
@@ -31,6 +31,8 @@ async fn main() -> Result<()> {
         }
     };
 
+    let db = sled::open("chair.sled")?;
+
     let token = config.bot_token;
     let intents = Intents::GUILDS | Intents::GUILD_MESSAGES | Intents::MESSAGE_CONTENT;
 
@@ -43,7 +45,7 @@ async fn main() -> Result<()> {
             .build(),
     );
 
-    let lfg_manager = Arc::new(LFGManager::new());
+    let lfg_manager = Arc::new(LFGManager::new(&db).context("creating lfg")?);
 
     loop {
         let event = match shard.next_event().await {
@@ -75,5 +77,17 @@ async fn main() -> Result<()> {
 }
 
 async fn handle_event(event: Event, context: ChairContext) -> Result<()> {
+    let context = Arc::new(context);
+    match event {
+        Event::MessageCreate(msg) => {
+            context.lfg.on_message(context.clone(), msg).await?;
+            info!("message create");
+        }
+        Event::MessageUpdate(msg) => {
+            info!("sup");
+        }
+        _ => {}
+    }
+
     Ok(())
 }

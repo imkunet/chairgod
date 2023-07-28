@@ -172,6 +172,7 @@ dependencies = [
  "env_struct",
  "itertools",
  "lazy-regex",
+ "rand",
  "serde",
  "sled",
  "tokio",
