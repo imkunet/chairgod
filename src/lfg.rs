@@ -2,10 +2,16 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use itertools::Itertools;
 use tokio::{sync::RwLock, task::AbortHandle};
-use twilight_http::request::AuditLogReason;
+use twilight_gateway::Event;
+use twilight_http::{request::AuditLogReason, Client};
 use twilight_model::{
-    channel::message::AllowedMentions,
+    channel::message::{
+        component::{ActionRow, Button, ButtonStyle},
+        AllowedMentions, Component, MentionType,
+    },
+    gateway::payload::incoming::MessageCreate,
     id::{marker::MessageMarker, Id},
 };
 use uuid::Uuid;
@@ -41,6 +47,14 @@ pub(crate) enum ExpiryStrategy {
 }
 
 impl LFGManager {
+    pub(crate) fn new() -> Self {
+        LFGManager {
+            sessions: RwLock::new(HashMap::new()),
+            session_uuids: RwLock::new(HashMap::new()),
+            session_timeouts: RwLock::new(HashMap::new()),
+        }
+    }
+
     async fn expire_session(
         &self,
         client: Arc<twilight_http::Client>,
@@ -116,5 +130,126 @@ impl LFGManager {
         Ok(())
     }
 
-    async fn render_message(session: &LFGSession) {}
+    async fn render_message(&self, client: Arc<Client>, session: LFGSession) -> Result<()> {
+        let numerator = session.initial_number as usize + session.participants.len();
+
+        let mut participants = format!("\n\n**Participants:**\n`•` <@{}>", session.author);
+        participants += &session
+            .participants
+            .iter()
+            .chain(session.added_participants.iter())
+            .map(|it| format!("`•` <@{}>", it))
+            .join("\n");
+
+        let actual = session.added_participants.len() + session.participants.len() + 1;
+
+        if actual < numerator {
+            participants += &format!("\n`•` **and {} other(s)...**", numerator - actual);
+        }
+
+        participants += "\n\n*delete the original message to cancel*";
+
+        if session.initial_number as usize + session.participants.len()
+            >= session.required_number as usize
+        {
+            let mut mentions = format!("<@{}>", session.author);
+            mentions += &session
+                .participants
+                .iter()
+                .chain(session.added_participants.iter())
+                .map(|it| format!("<@{}>", it))
+                .join(" ");
+
+            self.expire_session(client.clone(), ExpiryStrategy::DeleteOriginal, session.uuid)
+                .await?;
+
+            let embed = simple_embed(
+                0x8ae24a,
+                &format!(
+                    "Everyone's ready! [{}/{}]",
+                    numerator, session.required_number
+                ),
+                "Good luck everyone! Make wife proud!",
+            )?;
+            let embeds = &[embed];
+
+            let allow_users_roles_mentions = &AllowedMentions {
+                replied_user: false,
+                parse: vec![MentionType::Roles, MentionType::Users],
+                roles: vec![],
+                users: vec![],
+            };
+
+            client
+                .create_message(session.channel)
+                .content(&format!("||{mentions}||"))
+                .context("invalid message body")?
+                .embeds(embeds)
+                .context("invalid embed")?
+                .allowed_mentions(Some(allow_users_roles_mentions))
+                .await?;
+
+            return Ok(());
+        }
+
+        let embed = simple_embed(
+            0x8ae24a,
+            &format!("LFG Ping [{}/{}]", numerator, session.required_number),
+            &format!(
+                "<@{}> is looking for a game! (expires: <t:{}:R>){}",
+                session.author, session.expiry, participants
+            ),
+        )?;
+        let embeds = &[embed];
+
+        let component = Component::ActionRow(ActionRow {
+            components: vec![Component::Button(Button {
+                custom_id: Some(format!("lfg-{}", session.uuid)),
+                disabled: false,
+                emoji: None,
+                label: Some("Logging on / Online!".to_owned()),
+                style: ButtonStyle::Primary,
+                url: None,
+            })],
+        });
+
+        let components = &[component];
+
+        let reply_id = match session.reply_message {
+            None => {
+                let sent = client
+                    .create_message(session.channel)
+                    .content(&format!(
+                        "{} ||{}||",
+                        session.facade_tag, session.initial_tag
+                    ))
+                    .context("setting content")?
+                    .embeds(embeds)?
+                    .components(components)?
+                    .await?;
+
+                let sent_message = sent.model().await?;
+
+                let mut sessions = self.sessions.write().await;
+                let current_session = match sessions.get_mut(&session.uuid) {
+                    Some(v) => v,
+                    None => return Ok(()),
+                };
+                current_session.reply_message = Some(sent_message.id);
+                drop(sessions);
+
+                return Ok(());
+            }
+            Some(v) => v,
+        };
+
+        client
+            .update_message(session.channel, reply_id)
+            .embeds(Some(embeds))?
+            .await?;
+
+        Ok(())
+    }
+
+    pub(crate) fn on_message(event: Box<MessageCreate>) {}
 }

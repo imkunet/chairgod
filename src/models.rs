@@ -1,18 +1,33 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use twilight_cache_inmemory::InMemoryCache;
+use twilight_gateway::Latency;
 use twilight_model::id::{
     marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
     Id,
 };
 use uuid::Uuid;
 
+use crate::lfg::LFGManager;
+
+pub(crate) struct ChairContext {
+    pub(crate) http: Arc<twilight_http::Client>,
+    pub(crate) cache: Arc<InMemoryCache>,
+    pub(crate) latency: Latency,
+    pub(crate) lfg: Arc<LFGManager>,
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct LFGSession {
+    pub(crate) uuid: Uuid,
     pub(crate) guild: Id<GuildMarker>,
     pub(crate) channel: Id<ChannelMarker>,
     pub(crate) original_message: Id<MessageMarker>,
     pub(crate) reply_message: Option<Id<MessageMarker>>,
     pub(crate) author: Id<UserMarker>,
+    pub(crate) facade_tag: Id<RoleMarker>,
     pub(crate) initial_tag: Id<RoleMarker>,
     pub(crate) participants: Vec<Id<UserMarker>>,
     pub(crate) added_participants: Vec<Id<UserMarker>>,
