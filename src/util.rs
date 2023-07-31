@@ -3,7 +3,7 @@ use tracing::warn;
 use twilight_model::channel::message::Embed;
 use twilight_util::builder::embed::EmbedBuilder;
 
-pub(crate) fn simple_embed(color: u32, title: &str, desc: &str) -> Result<Embed> {
+pub fn simple_embed(color: u32, title: &str, desc: &str) -> Result<Embed> {
     Ok(EmbedBuilder::new()
         .color(color)
         .title(title)
@@ -19,7 +19,7 @@ pub(crate) fn simple_embed(color: u32, title: &str, desc: &str) -> Result<Embed>
 }
 
 // really REALLY dirty method
-pub(crate) fn coerce_into_u64(slice: &[u8]) -> u64 {
+pub fn coerce_into_u64(slice: &[u8]) -> u64 {
     if slice.len() < 8 {
         warn!("incomplete &[u8] trying to be coerced into u64 {:?}", slice);
         return 0;

@@ -1,20 +1,24 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use chrono::{Duration, Utc};
 use itertools::Itertools;
 use lazy_regex::regex_captures;
 use rand::{seq::SliceRandom, thread_rng};
 use sled::{Db, Tree};
-use tokio::{sync::RwLock, task::AbortHandle};
-use tracing::warn;
-use twilight_http::{request::AuditLogReason, Client};
+use tokio::{sync::RwLock, task::AbortHandle, time};
+use tracing::{info, warn};
+use twilight_http::request::AuditLogReason;
 use twilight_model::{
     channel::message::{
         component::{ActionRow, Button, ButtonStyle},
         AllowedMentions, Component, MentionType,
     },
     gateway::payload::incoming::MessageCreate,
-    id::{marker::MessageMarker, Id},
+    id::{
+        marker::{MessageMarker, RoleMarker},
+        Id,
+    },
 };
 use uuid::Uuid;
 
@@ -37,15 +41,15 @@ const BLANK_ALLOWED_MENTIONS: &AllowedMentions = &AllowedMentions {
     users: vec![],
 };
 
-pub(crate) struct LFGManager {
-    pub(crate) mention_types: Tree,
-    pub(crate) sessions: RwLock<HashMap<Uuid, LFGSession>>,
-    pub(crate) session_uuids: RwLock<HashMap<Id<MessageMarker>, Uuid>>,
-    pub(crate) session_timeouts: RwLock<HashMap<Uuid, AbortHandle>>,
+pub struct LFGManager {
+    pub mention_types: Tree,
+    pub sessions: RwLock<HashMap<Uuid, LFGSession>>,
+    pub session_uuids: RwLock<HashMap<Id<MessageMarker>, Uuid>>,
+    pub session_timeouts: RwLock<HashMap<Uuid, AbortHandle>>,
 }
 
 #[derive(PartialEq)]
-pub(crate) enum ExpiryStrategy {
+pub enum ExpiryStrategy {
     DeleteOriginal,
     ExpireMessageStale,
     ExpireMessageCancelled,
@@ -53,7 +57,7 @@ pub(crate) enum ExpiryStrategy {
 }
 
 impl LFGManager {
-    pub(crate) fn new(db: &Db) -> Result<Self> {
+    pub fn new(db: &Db) -> Result<Self> {
         Ok(LFGManager {
             mention_types: db.open_tree("mention_types")?,
             sessions: RwLock::new(HashMap::new()),
@@ -64,7 +68,7 @@ impl LFGManager {
 
     async fn expire_session(
         &self,
-        client: Arc<twilight_http::Client>,
+        context: Arc<ChairContext>,
         strategy: ExpiryStrategy,
         session_id: Uuid,
     ) -> Result<()> {
@@ -96,7 +100,8 @@ impl LFGManager {
         }
 
         if strategy == ExpiryStrategy::DeleteOriginal {
-            let delete_message = client
+            let delete_message = context
+                .http
                 .delete_message(session.channel, session.original_message)
                 .reason("LFG Ping expired")
                 .context("setting audit log reason")?;
@@ -104,11 +109,15 @@ impl LFGManager {
             return Ok(());
         }
 
-        let mut update = client
+        let mut update = context
+            .http
             .update_message(session.channel, reply_message)
             .content(None)
             .context("setting content to none")?
+            .components(Some(&[]))
+            .context("setting components to none")?
             .allowed_mentions(Some(BLANK_ALLOWED_MENTIONS));
+        info!("shayTA");
 
         let embed = if strategy == ExpiryStrategy::ExpireMessageStale {
             simple_embed(
@@ -134,10 +143,12 @@ impl LFGManager {
         update = update.embeds(Some(embeds))?;
         update.await?;
 
+        info!("shatTB");
+
         Ok(())
     }
 
-    async fn render_message(&self, client: Arc<Client>, session: LFGSession) -> Result<()> {
+    async fn render_message(&self, context: Arc<ChairContext>, session: LFGSession) -> Result<()> {
         let numerator = session.initial_number as usize + session.participants.len();
 
         let mut participants = format!("\n\n**Participants:**\n`•` <@{}>", session.author);
@@ -167,8 +178,12 @@ impl LFGManager {
                 .map(|it| format!("<@{}>", it))
                 .join(" ");
 
-            self.expire_session(client.clone(), ExpiryStrategy::DeleteOriginal, session.uuid)
-                .await?;
+            self.expire_session(
+                context.clone(),
+                ExpiryStrategy::DeleteOriginal,
+                session.uuid,
+            )
+            .await?;
 
             let embed = simple_embed(
                 0x8ae24a,
@@ -187,7 +202,8 @@ impl LFGManager {
                 users: vec![],
             };
 
-            client
+            context
+                .http
                 .create_message(session.channel)
                 .content(&format!("||{mentions}||"))
                 .context("invalid message body")?
@@ -203,8 +219,10 @@ impl LFGManager {
             0x8ae24a,
             &format!("LFG Ping [{}/{}]", numerator, session.required_number),
             &format!(
-                "<@{}> is looking for a game! (expires: <t:{}:R>){}",
-                session.author, session.expiry, participants
+                "<@{}> is looking for a game! (expires <t:{}:R>){}",
+                session.author,
+                session.expiry.timestamp(),
+                participants
             ),
         )?;
         let embeds = &[embed];
@@ -215,7 +233,7 @@ impl LFGManager {
                 disabled: false,
                 emoji: None,
                 label: Some("Logging on / Online!".to_owned()),
-                style: ButtonStyle::Primary,
+                style: ButtonStyle::Success,
                 url: None,
             })],
         });
@@ -224,11 +242,13 @@ impl LFGManager {
 
         let reply_id = match session.reply_message {
             None => {
-                let sent = client
+                let sent = context
+                    .http
                     .create_message(session.channel)
+                    .reply(session.original_message)
                     .content(&format!(
-                        "{} ||{}||",
-                        session.facade_tag, session.initial_tag
+                        "<@&{}> `{}/{}`    ||<@&{}>||",
+                        session.facade_tag, numerator, session.required_number, session.initial_tag
                     ))
                     .context("setting content")?
                     .embeds(embeds)?
@@ -250,7 +270,8 @@ impl LFGManager {
             Some(v) => v,
         };
 
-        client
+        context
+            .http
             .update_message(session.channel, reply_id)
             .embeds(Some(embeds))?
             .await?;
@@ -311,6 +332,11 @@ impl LFGManager {
         context: Arc<ChairContext>,
         message: Box<MessageCreate>,
     ) -> Result<()> {
+        let guild_id = match message.guild_id {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+
         if message.author.bot || message.author.system.unwrap_or(false) {
             return Ok(());
         }
@@ -321,12 +347,92 @@ impl LFGManager {
                 None => return Ok(()),
             };
 
-        if denominator == 0 {}
+        if denominator == 0 {
+            let embed = simple_embed(
+                0xff3030,
+                "Use the LFG Ping", 
+                "You cannot ping LFG roles without providing an indicator as to how many are playing, i.e. `@2v2pings 2/4`. Feel free to edit your message if you want to ping, as nobody has been pinged yet.")
+                .context("what")?;
+
+            let embeds = &[embed];
+
+            context
+                .http
+                .create_message(message.channel_id)
+                .reply(message.id)
+                .embeds(embeds)
+                .context("epic embed failure")?
+                .await?;
+
+            return Ok(());
+        }
+
+        let valid_mentions = message
+            .mentions
+            .iter()
+            .filter_map(|it| if it.bot { None } else { Some(it.id) })
+            .collect_vec();
+
+        let initial_numerator = (valid_mentions.len() + 1).max(numerator as usize);
+
+        if initial_numerator >= denominator as usize {
+            return Ok(());
+        }
+
+        let session_id = Uuid::new_v4();
+        let session = LFGSession {
+            uuid: session_id,
+            guild: guild_id,
+            channel: message.channel_id,
+            original_message: message.id,
+            reply_message: None,
+            author: message.author.id,
+            facade_tag: Id::<RoleMarker>::new_checked(facade_tag)
+                .context("cannot create facade tag marker")?,
+            initial_tag: Id::<RoleMarker>::new_checked(real_tag)
+                .context("cannot create real tag marker")?,
+            participants: Vec::new(),
+            added_participants: valid_mentions,
+            excluded_participants: Vec::new(),
+            interested_participants: Vec::new(),
+            initial_number: initial_numerator as u8,
+            required_number: denominator,
+            expiry: Utc::now() + Duration::minutes(30),
+        };
+
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session_id, session.clone());
+        drop(sessions);
+
+        let context_clone = context.clone();
+        let task = tokio::spawn(async move {
+            time::sleep(time::Duration::from_secs(10)).await;
+            tokio::spawn(async move {
+                context_clone
+                    .lfg
+                    .expire_session(
+                        context_clone.clone(),
+                        ExpiryStrategy::ExpireMessageStale,
+                        session_id,
+                    )
+                    .await
+            });
+        });
+
+        let mut timeouts = self.session_timeouts.write().await;
+        timeouts.insert(session_id, task.abort_handle());
+        drop(timeouts);
+
+        let mut session_uuids = self.session_uuids.write().await;
+        session_uuids.insert(message.id, session_id);
+        drop(session_uuids);
+
+        self.render_message(context.clone(), session).await?;
 
         Ok(())
     }
 
-    pub(crate) async fn on_message(
+    pub async fn on_message(
         &self,
         context: Arc<ChairContext>,
         event: Box<MessageCreate>,

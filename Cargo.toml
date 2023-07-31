@@ -22,11 +22,12 @@ color-eyre = "0.6"
 twilight-cache-inmemory = { version = "0.15", features = ["permission-calculator"] }
 twilight-gateway = { version = "0.15", features = ["native"] }
 twilight-http = { version = "0.15", features = ["native"] }
-twilight-interactions = "0.15"
 twilight-model = "0.15"
 twilight-util = { version = "0.15", features = ["builder", "permission-calculator", "snowflake"] }
+# 3rd party
+twilight-interactions = "0.15"
 
-uuid = { version = "1.4", features = ["serde"] }
+uuid = { version = "1.4", features = ["serde", "v4"] }
 
 [profile.release]
 opt-level = 3

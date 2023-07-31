@@ -4,55 +4,65 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use twilight_cache_inmemory::InMemoryCache;
 use twilight_gateway::Latency;
+use twilight_http::client::InteractionClient;
 use twilight_model::id::{
-    marker::{ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker},
+    marker::{
+        ApplicationMarker, ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker,
+    },
     Id,
 };
 use uuid::Uuid;
 
 use crate::lfg::LFGManager;
 
-pub(crate) struct ChairContext {
-    pub(crate) http: Arc<twilight_http::Client>,
-    pub(crate) cache: Arc<InMemoryCache>,
-    pub(crate) latency: Latency,
-    pub(crate) lfg: Arc<LFGManager>,
+pub struct ChairContext {
+    pub http: Arc<twilight_http::Client>,
+    pub application_id: Id<ApplicationMarker>,
+    pub cache: Arc<InMemoryCache>,
+    pub latency: Latency,
+    pub lfg: Arc<LFGManager>,
+}
+
+impl ChairContext {
+    pub fn interaction_client(&self) -> InteractionClient {
+        self.http.interaction(self.application_id)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub(crate) struct LFGSession {
-    pub(crate) uuid: Uuid,
-    pub(crate) guild: Id<GuildMarker>,
-    pub(crate) channel: Id<ChannelMarker>,
-    pub(crate) original_message: Id<MessageMarker>,
-    pub(crate) reply_message: Option<Id<MessageMarker>>,
-    pub(crate) author: Id<UserMarker>,
-    pub(crate) facade_tag: Id<RoleMarker>,
-    pub(crate) initial_tag: Id<RoleMarker>,
-    pub(crate) participants: Vec<Id<UserMarker>>,
-    pub(crate) added_participants: Vec<Id<UserMarker>>,
-    pub(crate) excluded_participants: Vec<Id<UserMarker>>,
-    pub(crate) interested_participants: Vec<Id<UserMarker>>,
-    pub(crate) initial_number: u8,
-    pub(crate) required_number: u8,
-    pub(crate) expiry: DateTime<Utc>,
+pub struct LFGSession {
+    pub uuid: Uuid,
+    pub guild: Id<GuildMarker>,
+    pub channel: Id<ChannelMarker>,
+    pub original_message: Id<MessageMarker>,
+    pub reply_message: Option<Id<MessageMarker>>,
+    pub author: Id<UserMarker>,
+    pub facade_tag: Id<RoleMarker>,
+    pub initial_tag: Id<RoleMarker>,
+    pub participants: Vec<Id<UserMarker>>,
+    pub added_participants: Vec<Id<UserMarker>>,
+    pub excluded_participants: Vec<Id<UserMarker>>,
+    pub interested_participants: Vec<Id<UserMarker>>,
+    pub initial_number: u8,
+    pub required_number: u8,
+    pub expiry: DateTime<Utc>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub(crate) struct ChairmanUser {
-    pub(crate) id: Id<UserMarker>,
-    pub(crate) main_link: Option<Uuid>,
-    pub(crate) linked_uuids: Option<Vec<Uuid>>,
-    pub(crate) created: DateTime<Utc>,
-    pub(crate) updated: DateTime<Utc>,
-    pub(crate) administrator: bool,
+pub struct ChairmanUser {
+    pub id: Id<UserMarker>,
+    pub main_link: Option<Uuid>,
+    pub linked_uuids: Option<Vec<Uuid>>,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+    pub administrator: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub(crate) struct ChairmanLink {
-    pub(crate) uuid: Uuid,
-    pub(crate) parent: Id<UserMarker>,
-    pub(crate) created: DateTime<Utc>,
-    pub(crate) updated: DateTime<Utc>,
-    pub(crate) last_username: String,
+pub struct ChairmanLink {
+    pub uuid: Uuid,
+    pub parent: Id<UserMarker>,
+    pub created: DateTime<Utc>,
+    pub updated: DateTime<Utc>,
+    pub last_username: String,
 }
